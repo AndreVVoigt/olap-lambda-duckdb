@@ -1,1 +1,17 @@
 .vscode
+# Ambiente Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Dados (gerados pelo ingest, nunca versionados)
+data/
+
+# Segredos e credenciais
+.env
+.aws/
+
+# Arquivos de sistema
+Thumbs.db
+.DS_Store
