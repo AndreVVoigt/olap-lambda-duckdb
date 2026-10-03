@@ -11,6 +11,7 @@ RAW = pathlib.Path("data/raw")
 LAKE = pathlib.Path("data/lake/trips")
 RELATORIO = pathlib.Path("data/ingest_report.csv")
 URL = "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{ano}-{mes:02d}.parquet"
+URL_ZONAS = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
 
 MESES = [(ano, mes) for ano in range(2019, 2026) for mes in range(1, 13)]
 WORKERS_DOWNLOAD = 4      # downloads em paralelo (I/O: threads ajudam)
@@ -165,12 +166,18 @@ def salvar_relatorio(linhas):
         writer.writeheader()
         writer.writerows(linhas)
 
+def ingerir_zonas(con):
+    destino = LAKE.parent / "zones" / "zones.parquet"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    con.sql(f"COPY (SELECT * FROM read_csv('{URL_ZONAS}')) TO '{destino.as_posix()}' (FORMAT parquet)")
+    print("[lake] zonas ok")
 
 # ---------------------------------------------------------------------------
 # Execução
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     con = duckdb.connect()
+    ingerir_zonas(con)
     inicio = time.perf_counter()
 
     falhas = baixar_todos(MESES)
