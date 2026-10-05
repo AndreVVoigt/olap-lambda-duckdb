@@ -22,6 +22,8 @@ CREATE OR REPLACE VIEW trips_validas AS
 # Fora do handler: roda uma vez por ambiente (cold start) e é reaproveitado
 # em todas as invocações seguintes enquanto o ambiente estiver "quente".
 con = duckdb.connect()
+if LAKE.startswith("s3://"):
+    con.sql("CREATE SECRET (TYPE s3, PROVIDER credential_chain, REGION 'us-east-1')")
 con.sql(VIEWS)
 
 # Erros causados pelo SQL enviado (sintaxe, tabela/coluna inexistente, tipo errado)
