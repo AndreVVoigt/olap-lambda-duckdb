@@ -19,11 +19,16 @@ CREATE OR REPLACE VIEW trips_validas AS
     SELECT * FROM trips WHERE NOT is_suspeita;
 """
 
-# Fora do handler: roda uma vez por ambiente (cold start) e é reaproveitado
-# em todas as invocações seguintes enquanto o ambiente estiver "quente".
-con = duckdb.connect()
+
+config = {}
+if os.environ.get("DUCKDB_EXTENSION_DIR"):
+    config["extension_directory"] = os.environ["DUCKDB_EXTENSION_DIR"]
+con = duckdb.connect(config=config)
+
 if LAKE.startswith("s3://"):
+    con.sql("LOAD httpfs; LOAD aws;")
     con.sql("CREATE SECRET (TYPE s3, PROVIDER credential_chain, REGION 'us-east-1')")
+
 con.sql(VIEWS)
 
 # Erros causados pelo SQL enviado (sintaxe, tabela/coluna inexistente, tipo errado)
