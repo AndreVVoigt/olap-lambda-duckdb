@@ -1,0 +1,1 @@
+{"sql": "SELECT count(*) AS corridas FROM trips_validas WHERE ano = 2024 AND mes = 1"}

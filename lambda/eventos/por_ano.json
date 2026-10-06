@@ -1,0 +1,1 @@
+{"sql": "SELECT ano, count(*) AS corridas FROM trips_validas GROUP BY ano ORDER BY ano"}
