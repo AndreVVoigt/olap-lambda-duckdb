@@ -116,7 +116,7 @@ def transformar_mes(con, arquivo, ano, mes):
     temp = final.with_suffix(".tmp")
 
     consulta = SQL.format(arquivo=caminho, ano=ano, mes=mes, cbd=cbd)
-    con.sql(f"COPY ({consulta}) TO '{temp.as_posix()}' (FORMAT parquet, COMPRESSION zstd)")
+    con.sql(f"COPY ({consulta}) TO '{temp.as_posix()}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 2000000)")
     temp.replace(final)                    # só vira trips.parquet se terminou
     return final.as_posix()
 
@@ -168,6 +168,9 @@ def salvar_relatorio(linhas):
 
 def ingerir_zonas(con):
     destino = LAKE.parent / "zones" / "zones.parquet"
+    if destino.exists():
+        print("[lake] zonas já existem, pulando")
+        return
     destino.parent.mkdir(parents=True, exist_ok=True)
     con.sql(f"COPY (SELECT * FROM read_csv('{URL_ZONAS}')) TO '{destino.as_posix()}' (FORMAT parquet)")
     print("[lake] zonas ok")
