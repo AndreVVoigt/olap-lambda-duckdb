@@ -20,16 +20,36 @@ CREATE OR REPLACE VIEW trips_validas AS
 """
 
 
+
+inicio_init = time.perf_counter()
+def marcar(etapa):
+    print(f"[init] {etapa}: {time.perf_counter() - inicio_init:.2f}s", flush=True)
+
 config = {}
 if os.environ.get("DUCKDB_EXTENSION_DIR"):
     config["extension_directory"] = os.environ["DUCKDB_EXTENSION_DIR"]
 con = duckdb.connect(config=config)
+marcar("conexao")
+if os.environ.get("DUCKDB_THREADS"):
+    con.sql(f"SET threads = {int(os.environ['DUCKDB_THREADS'])}")
 
 if LAKE.startswith("s3://"):
-    con.sql("LOAD httpfs; LOAD aws;")
-    con.sql("CREATE SECRET (TYPE s3, PROVIDER credential_chain, REGION 'us-east-1')")
+    con.sql("LOAD httpfs")
+    marcar("httpfs carregado")
+    if os.environ.get("AWS_SESSION_TOKEN"):
+        # Dentro da Lambda: credenciais temporárias da role, já nas variáveis de ambiente
+        con.sql(f"""CREATE SECRET (TYPE s3, REGION 'us-east-1',
+            KEY_ID '{os.environ["AWS_ACCESS_KEY_ID"]}',
+            SECRET '{os.environ["AWS_SECRET_ACCESS_KEY"]}',
+            SESSION_TOKEN '{os.environ["AWS_SESSION_TOKEN"]}')""")
+    else:
+        # No seu PC: lê o arquivo .aws/credentials
+        con.sql("LOAD aws")
+        con.sql("CREATE SECRET (TYPE s3, PROVIDER credential_chain, REGION 'us-east-1')")
+    marcar("credenciais")
 
 con.sql(VIEWS)
+marcar("views criadas")
 
 # Erros causados pelo SQL enviado (sintaxe, tabela/coluna inexistente, tipo errado)
 ERROS_DO_SQL = (
