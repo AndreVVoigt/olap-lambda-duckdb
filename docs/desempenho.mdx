@@ -1,0 +1,133 @@
+---
+title: Desempenho
+description: Como a agregação do lake inteiro na Lambda passou de timeout para 5,7 segundos, e o que cada teste ensinou.
+---
+
+Esta página registra os testes feitos para deixar as consultas rápidas na Lambda: as hipóteses, o que foi medido, o que deu errado e como se chegou à causa real.
+
+## A consulta de referência
+
+Todos os testes usam a mesma consulta, que agrega o lake inteiro (84 arquivos, 308 milhões de corridas):
+
+```sql
+SELECT ano, count(*) AS corridas
+FROM trips_validas
+GROUP BY ano ORDER BY ano
+```
+
+Ela só precisa ler a coluna `is_suspeita` (por causa de `trips_validas`). As colunas `ano` e `mes` vêm do nome das pastas, sem leitura de dados.
+
+## Ponto de partida: onde os dados estão muda tudo
+
+| Ambiente | Consulta | Tempo |
+|---|---|---|
+| DuckDB no PC, lendo o lake em disco local (SSD) | corridas por ano | 0,7 s |
+| DuckDB no PC, lendo do S3 pela internet | corridas + receita por ano | 108,5 s |
+| **Lambda na mesma região do S3** | **corridas + receita por ano** | **9,4 s** |
+| **Lambda na mesma região do S3** | **corridas por ano** | **5,7 s** |
+
+Com a mesma consulta (corridas + receita), a Lambda é cerca de **11 vezes mais rápida** que o PC lendo do S3 pela internet. O mesmo código e o mesmo lake, mudando só o lugar onde a computação acontece. Esse é o princípio do projeto: **levar a computação até os dados**.
+
+A consulta só de corridas é mais rápida porque lê uma coluna booleana minúscula. A de receita também lê `total_amount`, uma coluna com milhões de valores distintos, que ocupa bem mais espaço. No formato colunar, cada coluna a mais na consulta é mais dado trafegando.
+
+## Antes das consultas: o cold start
+
+O primeiro problema não foi de consulta, foi de inicialização. A Lambda tem um limite de 10 segundos para a fase de inicialização (o código fora do handler), e ela estourava esse limite sem quase usar memória: estava parada, esperando alguma coisa.
+
+Marcadores de tempo em cada etapa da inicialização mostraram que a busca de credenciais (`PROVIDER credential_chain` do DuckDB) travava dentro da Lambda. Com as credenciais temporárias da role passadas diretamente ao DuckDB:
+
+| | Antes | Depois |
+|---|---|---|
+| Inicialização | travava em 10 s (timeout) | 0,75 s |
+| Cold start total | — | ~1,5 s |
+
+<Info>
+Os marcadores de tempo continuam no handler. A cada cold start, o log do CloudWatch mostra quanto cada etapa levou.
+</Info>
+
+## A evolução
+
+![Evolução do tempo de agregação do lake inteiro na Lambda](/assets/evolucao_desempenho.png)
+
+| # | Hipótese | Mudança | Resultado | Conclusão |
+|---|---|---|---|---|
+| 1 | — | Configuração padrão: 2.048 MB, 1 thread | Acima de 60 s (timeout) | Com ~1 núcleo, o DuckDB fazia os pedidos ao S3 praticamente em fila |
+| 2 | O gargalo é **esperar a rede** | 16 threads | 28,8 s | Mais pedidos em paralelo ajudam muito. Hipótese confirmada em parte |
+| 3 | Falta **CPU** | 3.008 MB de memória (mais CPU) | 24,9 s | 47% mais recursos para 13% de ganho, e cada consulta ficou ~27% mais cara. **CPU não é o gargalo** |
+| 4 | Mais paralelismo resolve | 64 threads | 36,5 s | **Pior.** Com ~1 núcleo, as threads disputam o processador. Existe um ponto ideal |
+| 5 | O problema é o **número de pedidos**, causado pelo layout dos arquivos | Row groups de ~2 milhões de linhas no ingest | **5,7 s** | **Causa raiz.** 5 vezes mais rápido, sem mudar memória nem código da Lambda |
+
+Os testes 2 a 4 foram feitos só por configuração (variáveis de ambiente e memória), sem rebuild da imagem. Cada teste mudou **uma variável por vez**, para saber o que causou cada efeito.
+
+## A causa raiz: row groups
+
+Um arquivo Parquet é dividido em blocos de linhas (*row groups*). Dentro de cada bloco, cada coluna fica num pedaço separado, e o rodapé do arquivo diz onde está cada pedaço.
+
+Para ler uma coluna no S3, o DuckDB faz **um pedido por bloco**. E todo pedido tem uma espera fixa pela rede, independente do tamanho. Como a coluna `is_suspeita` é minúscula, quase todo o tempo de cada pedido era espera.
+
+| | Antes | Depois |
+|---|---|---|
+| Linhas por bloco | 122.880 (padrão do DuckDB) | ~2.000.000 |
+| Blocos em jan/2019 | 63 | 4 |
+| Blocos no lake inteiro | ~2.550 | ~190 |
+| Dados transferidos | praticamente iguais | praticamente iguais |
+
+A quantidade de dados não mudou. Mudou **em quantas viagens** eles vinham. Um modelo simplificado mostra a ordem de grandeza:
+
+```text
+tempo ≈ (pedidos × espera por pedido) ÷ pedidos em paralelo
+
+antes:  2.550 × ~0,15 s ÷ 16 ≈ 24 s   (medido: 28,8 s)
+depois:   190 × ~0,15 s ÷ 16 ≈ 1,8 s  (medido: 5,7 s, somando rodapés, transferência e descompressão)
+```
+
+**Por que não aparecia no PC:** no disco local, as mesmas 2.550 leituras custavam quase nada, e a consulta levava 0,7 s. O problema existia desde o início, mas só ficou visível quando cada leitura passou a ser uma viagem pela rede.
+
+A hipótese foi confirmada **antes** de qualquer mudança, lendo os metadados de um arquivo:
+
+```sql
+SELECT count(DISTINCT row_group_id) AS row_groups, max(row_group_num_rows) AS linhas_por_bloco
+FROM parquet_metadata('data/lake/trips/ano=2019/mes=1/trips.parquet')
+```
+
+A correção foi um único parâmetro no `COPY` do ingest:
+
+```sql
+COPY (...) TO 'trips.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 2000000)
+```
+
+## Custo por consulta
+
+A Lambda cobra memória × tempo (GB-segundo). Valores aproximados para a agregação do lake inteiro:
+
+| Configuração | GB-s | Custo aproximado |
+|---|---|---|
+| 2.048 MB, 16 threads, blocos pequenos | ~59 | ~US$ 0,0010 |
+| 3.008 MB, 16 threads, blocos pequenos | ~75 | ~US$ 0,0012 |
+| **2.048 MB, 16 threads, row groups de 2 mi** | **~12** | **~US$ 0,0002** |
+
+A configuração mais rápida também é a mais barata. E nenhum custo existe quando ninguém consulta.
+
+## Configuração final
+
+| Parâmetro | Valor |
+|---|---|
+| Memória da Lambda | 2.048 MB |
+| `DUCKDB_THREADS` | 16 |
+| Timeout | 60 s |
+| `ROW_GROUP_SIZE` no ingest | 2.000.000 linhas |
+
+## Lições
+
+1. **Medir antes de escalar.** Mais memória e mais threads pareciam a solução óbvia, e os números mostraram que não eram.
+2. **Hipóteses erradas também ensinam.** Os testes 3 e 4 eliminaram CPU e paralelismo como causa.
+3. **Confirmar a causa com dados antes de mudar.** A conta "2.550 blocos = 2.550 pedidos" foi verificada nos metadados antes da correção.
+4. **O custo da leitura é decidido na escrita.** O layout dos arquivos, definido no ingest, determinava o tempo de cada consulta.
+
+## O trade-off
+
+Blocos maiores deixam mais grosseiro o "pulo de blocos" pelo mínimo e máximo de cada coluna. Uma consulta de um único dia lê um bloco de ~2 milhões de linhas para achar ~100 mil corridas. Aqui a troca compensa, porque a partição por mês já elimina arquivos inteiros antes de qualquer bloco ser lido. O tamanho ideal depende de onde os dados estão e de como são consultados: para disco local com filtros estreitos, blocos menores seriam melhores.
+
+---
+
+[← Voltar para a introdução](/)

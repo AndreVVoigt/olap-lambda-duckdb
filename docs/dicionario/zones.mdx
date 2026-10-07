@@ -1,0 +1,44 @@
+---
+title: zones
+description: Tabela de zonas de táxi de Nova York, para traduzir IDs de local em distrito e zona.
+---
+
+Tabela de dimensão com as zonas de táxi definidas pelo NYC TLC. Traduz os IDs de local das corridas em distrito e nome da zona.
+
+| Propriedade | Valor |
+|---|---|
+| Origem | NYC TLC Taxi Zone Lookup |
+| Localização | `s3://<bucket>/zones/zones.parquet` |
+
+## Colunas
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `LocationID` | INTEGER | ID da zona. Junta com `trips.pu_location_id` e `trips.do_location_id` |
+| `Borough` | VARCHAR | Distrito (ex.: Manhattan, Queens) |
+| `Zone` | VARCHAR | Nome da zona (ex.: JFK Airport, Midtown Center) |
+| `service_zone` | VARCHAR | Classificação de serviço (ex.: Yellow Zone, Boro Zone) |
+
+## Zonas especiais
+
+| `LocationID` | Significado |
+|---|---|
+| 264 | Desconhecida (`Borough` = Unknown) |
+| 265 | Fora de Nova York (`Zone` = Outside of NYC) |
+
+As corridas dessas zonas **foram mantidas**. Nas análises por local, elas aparecem como categorias próprias.
+
+## Exemplo
+
+```sql
+SELECT z.Borough AS distrito, count(*) AS corridas
+FROM trips_validas t
+JOIN zones z ON t.pu_location_id = z.LocationID
+WHERE t.ano = 2024 AND t.mes = 1
+GROUP BY 1
+ORDER BY corridas DESC
+```
+
+---
+
+[← Voltar para a introdução](/)

@@ -1,0 +1,76 @@
+---
+title: trips
+description: Todas as corridas do táxi, padronizadas e particionadas por ano e mês.
+---
+
+Todas as corridas do lake, **incluindo** as sinalizadas como suspeitas. Para análises, prefira [`trips_validas`](/dicionario/trips-validas).
+
+| Propriedade | Valor |
+|---|---|
+| Origem | NYC TLC Yellow Taxi Trip Records |
+| Período | jan/2019 a dez/2025 |
+| Linhas | 307.999.349 |
+| Localização | `s3://<bucket>/trips/ano=AAAA/mes=M/trips.parquet` |
+| Partição | `ano`, `mes` |
+| Ordenação | `tpep_pickup_datetime` dentro de cada arquivo |
+| Formato | Parquet, compressão zstd, blocos de ~2 milhões de linhas |
+
+## Colunas
+
+| Coluna | Tipo | Descrição | Nome original (TLC) | Observações |
+|---|---|---|---|---|
+| `tpep_pickup_datetime` | TIMESTAMP | Data e hora em que o taxímetro foi ligado | `tpep_pickup_datetime` | Define o mês da partição |
+| `tpep_dropoff_datetime` | TIMESTAMP | Data e hora em que o taxímetro foi desligado | `tpep_dropoff_datetime` | |
+| `pu_location_id` | INTEGER | Zona de embarque | `PULocationID` | Junta com `zones.LocationID` |
+| `do_location_id` | INTEGER | Zona de desembarque | `DOLocationID` | Junta com `zones.LocationID` |
+| `passenger_count` | INTEGER | Número de passageiros | `passenger_count` | 0 foi convertido para NULL. NULL em corridas Flex Fare |
+| `trip_distance` | DOUBLE | Distância em milhas registrada pelo taxímetro | `trip_distance` | Valores 0 ou acima de 100 marcam `is_suspeita` |
+| `ratecode_id` | INTEGER | Tarifa em vigor no fim da corrida | `RatecodeID` | Ver códigos abaixo |
+| `payment_type` | INTEGER | Forma de pagamento | `payment_type` | Ver códigos abaixo |
+| `fare_amount` | DOUBLE | Tarifa calculada pelo taxímetro (USD) | `fare_amount` | |
+| `tip_amount` | DOUBLE | Gorjeta (USD) | `tip_amount` | **Só gorjetas no cartão.** Gorjetas em dinheiro não são registradas |
+| `tolls_amount` | DOUBLE | Pedágios (USD) | `tolls_amount` | |
+| `total_amount` | DOUBLE | Total cobrado (USD) | `total_amount` | Não inclui gorjeta em dinheiro. Negativos são contestações e foram mantidos. Acima de 1.000 marca `is_suspeita` |
+| `congestion_surcharge` | DOUBLE | Taxa estadual de congestionamento (USD) | `congestion_surcharge` | |
+| `airport_fee` | DOUBLE | Taxa de embarque em LaGuardia e JFK (USD) | `airport_fee` / `Airport_fee` | Unificada: o nome mudou ao longo dos anos |
+| `cbd_congestion_fee` | DOUBLE | Taxa da zona de congestionamento de Manhattan (USD) | `cbd_congestion_fee` | Cobrada desde 05/01/2025. NULL antes disso |
+| `is_suspeita` | BOOLEAN | Corrida com distância ou valor fora do plausível | — | Criada no ingest. Ver [Regras de qualidade](/qualidade) |
+| `ano` | INTEGER | Ano da corrida | — | Vem do nome da pasta (partição) |
+| `mes` | INTEGER | Mês da corrida | — | Vem do nome da pasta (partição) |
+
+**Colunas do TLC não incluídas:** `VendorID`, `store_and_fwd_flag`, `extra`, `mta_tax` e `improvement_surcharge`.
+
+## Códigos
+
+**`ratecode_id`**
+
+| Código | Significado |
+|---|---|
+| 1 | Tarifa padrão |
+| 2 | JFK |
+| 3 | Newark |
+| 4 | Nassau ou Westchester |
+| 5 | Tarifa negociada |
+| 6 | Corrida em grupo |
+| 99 | Desconhecido |
+
+**`payment_type`**
+
+| Código | Significado |
+|---|---|
+| 0 | Flex Fare |
+| 1 | Cartão de crédito |
+| 2 | Dinheiro |
+| 3 | Sem cobrança |
+| 4 | Contestação |
+| 5 | Desconhecido |
+| 6 | Corrida anulada |
+
+## Boas práticas
+
+- **Sempre que possível, filtre por `ano` e `mes`.** O filtro na partição faz o DuckDB abrir só os arquivos necessários.
+- **Selecione só as colunas que precisa.** O formato colunar lê apenas as colunas usadas na consulta.
+
+---
+
+[← Voltar para a introdução](/)

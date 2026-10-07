@@ -1,0 +1,99 @@
+---
+title: Como consultar
+description: Requisitos, exemplos de consultas e limites do serviço.
+---
+
+As consultas são enviadas à Lambda `olap-duckdb`, que executa o SQL no DuckDB e devolve o resultado.
+
+## Requisitos
+
+- Credenciais AWS configuradas (`aws configure`) de um usuário com permissão para invocar a função.
+- Python com `boto3` instalado.
+
+## Uso
+
+```bash
+python consultar.py "SELECT ano, count(*) AS corridas FROM trips_validas GROUP BY ano ORDER BY ano"
+python consultar.py -f consultas/por_ano.sql
+```
+
+## Tabelas disponíveis
+
+| Tabela | Uso |
+|---|---|
+| [`trips_validas`](/dicionario/trips-validas) | Padrão para análises |
+| [`trips`](/dicionario/trips) | Todas as corridas, inclusive as suspeitas |
+| [`zones`](/dicionario/zones) | Distrito e zona de cada `LocationID` |
+
+## Exemplos
+
+**Corridas e receita por ano**
+
+```sql
+SELECT ano, count(*) AS corridas, round(sum(total_amount) / 1e6, 1) AS receita_mi_usd
+FROM trips_validas
+GROUP BY ano ORDER BY ano
+```
+
+**As 10 zonas com mais embarques em um mês**
+
+```sql
+SELECT z.Borough AS distrito, z.Zone AS zona, count(*) AS corridas
+FROM trips_validas t
+JOIN zones z ON t.pu_location_id = z.LocationID
+WHERE t.ano = 2024 AND t.mes = 1
+GROUP BY ALL ORDER BY corridas DESC LIMIT 10
+```
+
+**Corridas por hora do dia (abril de 2020, início da pandemia)**
+
+```sql
+SELECT hour(tpep_pickup_datetime) AS hora, count(*) AS corridas
+FROM trips_validas
+WHERE ano = 2020 AND mes = 4
+GROUP BY 1 ORDER BY 1
+```
+
+**Gorjeta média no cartão, por ano**
+
+```sql
+SELECT ano, round(avg(tip_amount / fare_amount) * 100, 1) AS gorjeta_pct
+FROM trips_validas
+WHERE payment_type = 1 AND fare_amount > 0
+GROUP BY ano ORDER BY ano
+```
+
+Filtra `payment_type = 1` porque gorjetas em dinheiro não são registradas.
+
+**Taxa de congestionamento de Manhattan em 2025**
+
+```sql
+SELECT mes, count(*) AS corridas, round(avg(cbd_congestion_fee), 2) AS taxa_media_usd
+FROM trips_validas
+WHERE ano = 2025
+GROUP BY mes ORDER BY mes
+```
+
+## Limites
+
+| Limite | Valor | Motivo |
+|---|---|---|
+| Tempo por consulta | 60 s | Timeout da Lambda. Também limita o custo de cada chamada |
+| Linhas na resposta | 10.000 | Tamanho máximo da resposta de uma Lambda. Resultados maiores voltam com `truncado: true` |
+
+## Respostas de erro
+
+| Código | Significado |
+|---|---|
+| 400 | Erro no SQL (sintaxe, tabela ou coluna inexistente). A mensagem do DuckDB indica o problema |
+| 500 | Falha ao executar a consulta. O detalhe fica nos logs do CloudWatch |
+
+## Boas práticas
+
+- Use `trips_validas` para análises.
+- Filtre por `ano` e `mes` sempre que possível.
+- Peça resultados **agregados**. A Lambda devolve respostas, não dados brutos.
+
+---
+
+[← Voltar para a introdução](/)

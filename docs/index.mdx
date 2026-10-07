@@ -1,0 +1,47 @@
+---
+title: NYC Taxi OLAP
+description: Consultas analíticas sob demanda sobre 308 milhões de corridas, sem servidor ligado.
+---
+
+Engine analítica **sob demanda** sobre o histórico de corridas do táxi amarelo de Nova York (jan/2019 a dez/2025).
+
+Os dados ficam parados e baratos no **Amazon S3**, em Parquet particionado. A computação só existe durante a consulta: uma **AWS Lambda** com **DuckDB** acorda, executa o SQL e devolve o resultado em JSON.
+
+## Arquitetura
+
+| Camada | Onde | O que contém |
+|---|---|---|
+| Bronze | Máquina local (`data/raw`) | 84 arquivos Parquet originais do NYC TLC |
+| Silver | Amazon S3 (`us-east-1`) | Corridas padronizadas, limpas e particionadas por `ano` e `mes` |
+| Gold | AWS Lambda + DuckDB | Views `trips`, `trips_validas` e `zones`, consultadas com SQL |
+
+O acesso é exclusivo do dono do projeto: a Lambda não tem URL pública e só pode ser invocada com credenciais IAM da conta.
+
+## Números
+
+| Métrica | Valor |
+|---|---|
+| Corridas no lake | 307.999.349 |
+| Período | jan/2019 a dez/2025 (84 meses) |
+| Tamanho bruto | 4,87 GB |
+| Tamanho no lake | ~3,6 GB (Parquet + zstd) |
+| Consulta de um mês | ~0,9 s |
+| Agregação do lake inteiro | ~5,7 s |
+| Cold start | ~1,5 s |
+
+## Por onde começar
+
+<CardGroup cols={2}>
+  <Card title="Como consultar" icon="terminal" href="/consultas">
+    Requisitos, exemplos de SQL e limites do serviço.
+  </Card>
+  <Card title="Dicionário de dados" icon="table" href="/dicionario/trips">
+    Todas as tabelas, colunas, tipos e códigos.
+  </Card>
+  <Card title="Regras de qualidade" icon="check" href="/qualidade">
+    O que foi descartado, mantido ou sinalizado, e por quê.
+  </Card>
+  <Card title="Desempenho" icon="chart-line" href="/desempenho">
+    Como a agregação do lake passou de timeout para 5,7 s.
+  </Card>
+</CardGroup>

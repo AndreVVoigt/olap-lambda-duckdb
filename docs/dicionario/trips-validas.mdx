@@ -1,0 +1,40 @@
+---
+title: trips_validas
+description: Corridas sem as sinalizadas como suspeitas. A view padrão para análises.
+---
+
+View sobre [`trips`](/dicionario/trips) que **exclui as corridas suspeitas**. É a tabela recomendada para qualquer análise.
+
+## Definição
+
+```sql
+CREATE VIEW trips_validas AS
+    SELECT * FROM trips WHERE NOT is_suspeita;
+```
+
+Tem as mesmas colunas de `trips`.
+
+## Por que existe
+
+As regras de negócio ficam num lugar só. Quem consulta não precisa lembrar de filtrar `is_suspeita`, e todas as análises calculam as métricas do mesmo jeito.
+
+| Tabela | Corridas |
+|---|---|
+| `trips` | 307.999.349 |
+| `trips_validas` | 302.969.056 |
+| Diferença (suspeitas) | 5.030.293 (~1,6%) |
+
+## Quando usar `trips` em vez dela
+
+Para investigar os casos estranhos, por exemplo:
+
+```sql
+SELECT trip_distance, total_amount
+FROM trips
+WHERE ano = 2024 AND mes = 1 AND is_suspeita
+LIMIT 20
+```
+
+---
+
+[← Voltar para a introdução](/)

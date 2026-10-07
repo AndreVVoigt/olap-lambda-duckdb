@@ -1,0 +1,94 @@
+---
+title: Regras de qualidade
+description: O que foi descartado, mantido ou sinalizado na ingestão, e por quê.
+---
+
+As regras abaixo nasceram da exploração dos dados originais do NYC TLC e são aplicadas pelo `ingest.py` na passagem da camada Bronze para a Silver.
+
+## Princípio
+
+Nem todo dado estranho é dado errado. Para cada problema encontrado, a pergunta-guia foi:
+
+> **Se eu remover isso, algum número das análises fica errado?**
+
+A resposta leva a uma de três decisões:
+
+| Decisão | Quando | Efeito |
+|---|---|---|
+| **Descartar** | O valor é comprovadamente impossível | A linha não entra no lake |
+| **Sinalizar** | O valor é estranho, mas pode ser real | A linha entra com `is_suspeita = true` e fica fora de `trips_validas` |
+| **Manter** | O valor parece estranho, mas é legítimo | A linha entra normalmente |
+
+<Info>
+Descartar é irreversível. Por isso, só foi descartado o que é impossível de forma comprovada. Todo o resto continua no lake, e cada análise decide o que usar.
+</Info>
+
+## Regras aplicadas
+
+| Problema | Decisão | Justificativa |
+|---|---|---|
+| Embarque fora do mês do arquivo (ex.: corrida de 2002 no arquivo de jan/2024) | **Descartar** | Impossível. Criaria partições absurdas, como `ano=2002` |
+| Distância igual a 0 | **Sinalizar** | Pode ser corrida cancelada com o taxímetro já ligado |
+| Distância acima de 100 milhas (máximo encontrado: 312.722) | **Sinalizar** | Fora do plausível para corridas em Nova York, mas não comprovadamente falso |
+| Total acima de US$ 1.000 (máximo encontrado: 5.000) | **Sinalizar** | Pode ser erro de digitação ou corrida negociada |
+| Valores monetários negativos | **Manter** | Concentrados em `payment_type = 4` (contestação). São estornos reais, e removê-los inflaria a receita |
+| Nulos em 5 colunas (4,73% em jan/2024) | **Manter** | Todos em `payment_type = 0` (Flex Fare), uma categoria que não registra essas colunas |
+| `passenger_count = 0` | **Converter para NULL** | Zero passageiros não existe. NULL comunica "desconhecido" |
+| Zonas 264 (desconhecida) e 265 (fora de NYC) | **Manter** | Corridas reais. Aparecem como categorias próprias nas análises por local |
+
+A regra de sinalização, como aplicada no ingest:
+
+```sql
+(trip_distance <= 0 OR trip_distance > 100 OR total_amount > 1000) AS is_suspeita
+```
+
+Os limites de 100 milhas e US$ 1.000 são uma escolha de bom senso para corridas dentro de Nova York, e não um valor exato. Eles ficam num único lugar do ingest e podem ser ajustados com um reprocessamento.
+
+## Mudanças de schema na origem
+
+Os 84 arquivos do TLC não têm o mesmo schema. O ingest padroniza nomes (snake_case minúsculo) e força um tipo único por coluna.
+
+**Corte em fev/2023:** várias colunas mudam de tipo ao mesmo tempo.
+
+| Coluna | 2019-01 a 2023-01 (49 arquivos) | 2023-02 a 2025-12 (35 arquivos) | No lake |
+|---|---|---|---|
+| `passenger_count` | DOUBLE | INT64 | INTEGER |
+| `RatecodeID` | DOUBLE | INT64 | INTEGER |
+| `VendorID` | INT64 | INT32 | não incluída |
+| `PULocationID` / `DOLocationID` | INT64 | INT32 | INTEGER |
+
+O corte é limpo: as contagens de arquivos por tipo (49 e 35) batem exatamente com os intervalos de meses.
+
+**`airport_fee` com dois nomes:** aparece como `airport_fee` nos arquivos antigos e `Airport_fee` nos recentes. No lake, vira uma coluna só.
+
+**`cbd_congestion_fee`:** só existe a partir de 2025. Nos meses anteriores, fica NULL, porque a taxa não existia, e NULL significa "não se aplica", enquanto 0 significaria "cobrado zero".
+
+## Resultado da ingestão
+
+| Métrica | Valor |
+|---|---|
+| Linhas lidas | 308.010.490 |
+| Linhas gravadas | 307.999.349 |
+| Descartadas (fora do mês) | 11.141 (0,004%) |
+| Sinalizadas como suspeitas | 5.030.293 (1,6%) |
+| Meses com falha | 0 de 84 |
+
+As linhas lidas batem com a contagem feita na exploração, lendo apenas os metadados dos arquivos remotos. São duas medições independentes chegando ao mesmo número, o que confirma que nenhum arquivo foi baixado incompleto.
+
+## Alertas para quem analisa
+
+<Warning>
+`tip_amount` registra **só gorjetas pagas no cartão**. Gorjetas em dinheiro não entram. Em análises de gorjeta, filtre `payment_type = 1`. Corridas em dinheiro aparecem com gorjeta zero por limitação do dado, não por comportamento.
+</Warning>
+
+- `total_amount` também não inclui gorjetas em dinheiro.
+- `airport_fee` só se aplica a embarques em LaGuardia e JFK.
+- `cbd_congestion_fee` só tem valores a partir de 05/01/2025.
+
+## Fonte
+
+Códigos e definições conferidos no *Data Dictionary – Yellow Taxi Trip Records* do NYC TLC (versão de 18/03/2025).
+
+---
+
+[← Voltar para a introdução](/)

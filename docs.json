@@ -1,0 +1,63 @@
+{
+  "$schema": "https://docs.page/schema.json",
+  "name": "NYC Taxi OLAP",
+  "description": "Engine OLAP sob demanda com DuckDB, AWS Lambda e S3 sobre 308 milhões de corridas do NYC Yellow Taxi",
+  "favicon": "/assets/favicon.png",
+  "theme": {
+    "primary": "#F08C00"
+  },
+  "header": {
+    "showGitHubCard": true,
+    "links": [
+      {
+        "title": "Repositório no GitHub",
+        "href": "https://github.com/AndreVVoigt/olap-lambda-duckdb"
+      }
+    ]
+  },
+  "sidebar": [
+    {
+      "group": "Visão geral",
+      "pages": [
+        {
+          "title": "Introdução",
+          "href": "/"
+        },
+        {
+          "title": "Como consultar",
+          "href": "/consultas"
+        },
+        {
+          "title": "Desempenho",
+          "href": "/desempenho"
+        }
+      ]
+    },
+    {
+      "group": "Dicionário de dados",
+      "pages": [
+        {
+          "title": "trips",
+          "href": "/dicionario/trips"
+        },
+        {
+          "title": "trips_validas",
+          "href": "/dicionario/trips-validas"
+        },
+        {
+          "title": "zones",
+          "href": "/dicionario/zones"
+        }
+      ]
+    },
+    {
+      "group": "Qualidade",
+      "pages": [
+        {
+          "title": "Regras de qualidade",
+          "href": "/qualidade"
+        }
+      ]
+    }
+  ]
+}
