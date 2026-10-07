@@ -30,6 +30,10 @@
         {
           "title": "Desempenho",
           "href": "/desempenho"
+        },
+        {
+          "title": "Custos vs Athena",
+          "href": "/custos"
         }
       ]
     },

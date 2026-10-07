@@ -1,0 +1,123 @@
+---
+title: Custos vs Athena
+description: Quanto cada consulta custa na Lambda e quanto custaria no Amazon Athena, com as contas e uma regra prática para escolher.
+---
+
+# Custos vs Athena
+
+O Amazon Athena é a alternativa mais comum para consultar Parquet no S3 com SQL, sem servidor. Esta página compara o custo das mesmas consultas nos dois modelos, usando os dados reais do lake.
+
+## Como cada serviço cobra
+
+| Serviço | O que cobra | Preço |
+|---|---|---|
+| **Athena** | Volume de dados lidos do S3 | US$ 5 por TB lido, com mínimo de 10 MB por consulta |
+| **Lambda** | Tempo de execução × memória | US$ 0,0000166667 por GB-segundo + US$ 0,20 por milhão de requisições |
+
+A Lambda tem um free tier permanente de 400.000 GB-segundos por mês. O Athena não tem free tier.
+
+```text
+Athena = max(MB lidos, 10) ÷ 1.048.576 × US$ 5
+Lambda = memória (GB) × duração (s) × US$ 0,0000166667
+```
+
+Os dois leem só as colunas e partições que a consulta usa. As colunas `ano` e `mes` vêm do nome das pastas e não custam leitura em nenhum dos dois.
+
+## Quanto cada coluna ocupa no lake
+
+Tamanho comprimido de cada coluna somando os 84 arquivos (MB = 10⁶ bytes):
+
+| Coluna | MB |
+|---|---|
+| `tpep_dropoff_datetime` | 998,7 |
+| `total_amount` | 485,9 |
+| `trip_distance` | 436,1 |
+| `tpep_pickup_datetime` | 420,4 |
+| `fare_amount` | 355,7 |
+| `tip_amount` | 326,7 |
+| `do_location_id` | 310,5 |
+| `pu_location_id` | 273,3 |
+| `passenger_count` | 74,9 |
+| `payment_type` | 57,4 |
+| `congestion_surcharge` | 41,6 |
+| `tolls_amount` | 40,0 |
+| `ratecode_id` | 36,5 |
+| `airport_fee` | 27,0 |
+| `is_suspeita` | 7,0 |
+| `cbd_congestion_fee` | 7,0 |
+
+Obtido com:
+
+```sql
+SELECT path_in_schema AS coluna, round(sum(total_compressed_size) / 1e6, 1) AS mb
+FROM parquet_metadata('data/lake/trips/*/*/*.parquet')
+GROUP BY 1 ORDER BY 2 DESC
+```
+
+<Info>
+`tpep_dropoff_datetime` ocupa mais que o dobro de `tpep_pickup_datetime`, com o mesmo tipo e o mesmo número de linhas. É efeito da ordenação do ingest: os horários de embarque ficam em sequência e comprimem muito bem. Os de desembarque ficam quase em ordem, e comprimem pior.
+</Info>
+
+## Comparação por consulta
+
+Lambda com 2.048 MB (2 GB), na configuração final.
+
+| Consulta | Colunas lidas | MB lidos | Athena | Lambda | Mais barato |
+|---|---|---|---|---|---|
+| Contagem por ano | `is_suspeita` | 7 (cobra o mínimo de 10) | US$ 0,00005 | US$ 0,00019 (5,7 s) | **Athena**, ~4× |
+| Corridas + receita por ano | `is_suspeita`, `total_amount` | ~493 | US$ 0,0022 | US$ 0,0003 (9,4 s) | **Lambda**, ~7× |
+
+- Na **consulta leve**, o Athena cobra só os poucos MB lidos, enquanto a Lambda cobra os segundos de execução.
+- Na **consulta que lê uma coluna pesada**, o Athena cobra cada MB, enquanto a Lambda cobra o tempo, que cresce bem menos que os bytes.
+
+## Regra prática
+
+Igualando as duas fórmulas, com a Lambda de 2 GB:
+
+> **A Lambda é mais barata quando a consulta lê mais de ~7 MB por segundo de execução.**
+
+| Consulta | MB lidos ÷ segundos | Resultado |
+|---|---|---|
+| Contagem por ano | 7 ÷ 5,7 ≈ 1 MB/s | Abaixo da linha: Athena ganha |
+| Corridas + receita | 493 ÷ 9,4 ≈ 52 MB/s | Acima da linha: Lambda ganha |
+
+Consultas sobre colunas pesadas (valores, horários, distâncias) tendem a favorecer a Lambda. Consultas que só contam linhas ou leem colunas minúsculas tendem a favorecer o Athena.
+
+## Em escala
+
+Exemplo: 10.000 consultas de corridas + receita por mês, como um painel atualizado com frequência.
+
+| | Athena | Lambda |
+|---|---|---|
+| Custo das consultas | ≈ US$ 22 | 187 mil GB-s, dentro do free tier: **US$ 0** |
+| Sem o free tier | — | ≈ US$ 3 |
+
+Os dois também pagam pelos pedidos ao S3. Com ~190 blocos no lake, isso fica em centésimos de centavo por consulta para ambos.
+
+## As otimizações barateiam só a Lambda
+
+O Athena cobra por MB lidos, e os row groups maiores não mudam os MB. A Lambda cobra por tempo, então cada segundo de espera eliminado virou economia direta.
+
+| Contagem por ano na Lambda | Duração | Custo |
+|---|---|---|
+| Antes da otimização dos row groups | 28,8 s | ~US$ 0,00096 (~20× o Athena) |
+| Depois | 5,7 s | ~US$ 0,00019 (~4× o Athena) |
+
+Ver [Desempenho](/desempenho).
+
+## O que a tabela não mostra
+
+- **No volume atual, a diferença é de centavos por mês.** O argumento econômico só pesa com muitas consultas.
+- **O Athena é gerenciado.** Não há código para manter, há catálogo de tabelas, permissões por usuário e consultas sem o limite de 60 s. Numa empresa, o custo total inclui as horas de engenharia.
+- **A escolha depende do padrão de uso.** Muitas consultas previsíveis sobre colunas pesadas favorecem a Lambda com DuckDB. Uso exploratório por muitas pessoas favorece o Athena.
+
+## Fontes de preço
+
+- [Amazon Athena pricing](https://aws.amazon.com/athena/pricing/)
+- [AWS Lambda pricing](https://aws.amazon.com/lambda/pricing/)
+
+Valores de us-east-1, consultados em outubro de 2026.
+
+---
+
+[← Voltar para a introdução](/)
